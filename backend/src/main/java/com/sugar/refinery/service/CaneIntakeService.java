@@ -29,14 +29,21 @@ public class CaneIntakeService {
         this.intakeRepository = intakeRepository;
     }
 
+    /**
+     * 磅单列表：验收状态与品质结论可单独或组合使用，组合时按「同时满足」返回；
+     * 未传 / 空白的条件不参与限制。非法取值直接报错，不允许静默退化成全部磅单。
+     */
+    @Transactional(readOnly = true)
     public List<CaneIntake> list(String status, String result) {
-        if (status != null && !status.isBlank()) {
-            return intakeRepository.findByStatus(status);
+        String s = status == null || status.isBlank() ? null : status.trim();
+        String r = result == null || result.isBlank() ? null : result.trim();
+        if (s != null && !Dict.isValidIntakeStatus(s)) {
+            throw new BizException("验收状态不合法：" + s);
         }
-        if (result != null && !result.isBlank()) {
-            return intakeRepository.findByResult(result);
+        if (r != null && !Dict.isValidIntakeResult(r)) {
+            throw new BizException("品质结论不合法：" + r);
         }
-        return intakeRepository.findAll();
+        return intakeRepository.search(s, r);
     }
 
     public CaneIntake get(Long id) {
@@ -132,7 +139,12 @@ public class CaneIntakeService {
         return intakeRepository.save(intake);
     }
 
-    /** 当日进厂总量（吨） */
+    /**
+     * 当日进厂总量（吨）。
+     *
+     * <p>固定口径：全厂当日有效磅单（非「已拒收」）净重之和，与列表筛选条件完全无关——
+     * 值班员按状态 / 结论缩小列表时，「今日进厂总量」不能跟着缩小。</p>
+     */
     @Transactional(readOnly = true)
     public BigDecimal dailyIntakeTon() {
         BigDecimal sum = BigDecimal.ZERO;

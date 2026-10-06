@@ -1,11 +1,66 @@
 -- H2（MODE=MySQL）测试库结构：与 MySQL schema.sql 同构，保留闭环测试涉及的
--- 洗罐、成品糖批次、质量复检表；唯一索引和 CHECK 约束在数据库层兜底。
+-- 进厂磅单、洗罐、成品糖批次、质量复检表；唯一索引和 CHECK 约束在数据库层兜底。
 
 DROP TABLE IF EXISTS feed_batch;
 DROP TABLE IF EXISTS sugar_quality_inspection;
 DROP TABLE IF EXISTS sugar_batch;
 DROP TABLE IF EXISTS pan_wash;
 DROP TABLE IF EXISTS evap_pan;
+DROP TABLE IF EXISTS press_station;
+DROP TABLE IF EXISTS cane_intake;
+
+-- ---------------- 甘蔗进厂验收 ----------------
+CREATE TABLE cane_intake (
+    id            BIGINT AUTO_INCREMENT PRIMARY KEY,
+    ticket_no     VARCHAR(32) NOT NULL UNIQUE,
+    supplier      VARCHAR(64) NOT NULL,
+    truck_no      VARCHAR(24) NOT NULL,
+    gross_kg      DECIMAL(12,2) NOT NULL,
+    tare_kg       DECIMAL(12,2) NOT NULL,
+    net_kg        DECIMAL(12,2) NOT NULL,
+    deduction_kg  DECIMAL(12,2) NOT NULL DEFAULT 0,
+    allocated_kg  DECIMAL(12,2) NOT NULL DEFAULT 0,
+    brix          DECIMAL(5,2)  NOT NULL,
+    purity        DECIMAL(5,2)  NOT NULL,
+    fiber         DECIMAL(5,2)  NOT NULL,
+    result        VARCHAR(16) NOT NULL,
+    status        VARCHAR(16) NOT NULL,
+    intake_at     TIMESTAMP,
+    CONSTRAINT ck_intake_alloc CHECK (allocated_kg >= 0 AND allocated_kg <= net_kg)
+);
+
+CREATE TABLE press_station (
+    id                  BIGINT AUTO_INCREMENT PRIMARY KEY,
+    station_code        VARCHAR(24) NOT NULL UNIQUE,
+    station_name        VARCHAR(64) NOT NULL,
+    design_capacity_tph DECIMAL(8,2) NOT NULL,
+    current_load_tph    DECIMAL(8,2) NOT NULL DEFAULT 0,
+    occupied_kg         DECIMAL(14,2) NOT NULL DEFAULT 0,
+    status              VARCHAR(16) NOT NULL,
+    last_maintain_at    TIMESTAMP,
+    CONSTRAINT ck_press_occupied CHECK (occupied_kg >= 0 AND occupied_kg <= design_capacity_tph * 1000)
+);
+
+CREATE TABLE feed_batch (
+    id            BIGINT AUTO_INCREMENT PRIMARY KEY,
+    batch_no      VARCHAR(32) NOT NULL UNIQUE,
+    request_id    VARCHAR(36) NOT NULL UNIQUE,
+    intake_id     BIGINT NOT NULL,
+    ticket_no     VARCHAR(32) NOT NULL,
+    station_id    BIGINT NOT NULL,
+    station_name  VARCHAR(64) NOT NULL,
+    planned_kg    DECIMAL(12,2) NOT NULL,
+    actual_kg     DECIMAL(12,2),
+    status        VARCHAR(16) NOT NULL,
+    created_at    TIMESTAMP,
+    started_at    TIMESTAMP,
+    completed_at  TIMESTAMP,
+    cancelled_at  TIMESTAMP,
+    CONSTRAINT fk_feed_intake FOREIGN KEY (intake_id) REFERENCES cane_intake(id),
+    CONSTRAINT fk_feed_station FOREIGN KEY (station_id) REFERENCES press_station(id),
+    CONSTRAINT ck_feed_planned CHECK (planned_kg > 0),
+    CONSTRAINT ck_feed_actual CHECK (actual_kg IS NULL OR (actual_kg > 0 AND actual_kg <= planned_kg))
+);
 
 CREATE TABLE sugar_batch (
     id              BIGINT AUTO_INCREMENT PRIMARY KEY,

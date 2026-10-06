@@ -6,6 +6,13 @@ const http = axios.create({ baseURL: '/api', timeout: 20000 })
 http.interceptors.response.use(
   (response) => response,
   (error) => {
+    // 主动取消（AbortController / 切换条件顶掉旧请求）：统一标记成 AbortError，
+    // 让调用方按「旧响应丢弃」处理，不当成接口失败提示
+    if (error?.code === 'ERR_CANCELED' || error?.name === 'AbortError' || error?.name === 'CanceledError') {
+      const aborted = new Error('请求已取消')
+      aborted.name = 'AbortError'
+      return Promise.reject(aborted)
+    }
     const message = error?.response?.data?.message || error?.message || '请求失败'
     return Promise.reject(new Error(message))
   }
@@ -24,11 +31,12 @@ const params = (o) => ({ params: o })
 
 export default {
   // ---------------- 甘蔗进厂 ----------------
-  listIntakes: (p) => call(http.get('/cane-intakes', params(p))),
+  // signal 支持：快速切换筛选条件时，较早发出的慢请求会被 AbortController 取消
+  listIntakes: (p, signal) => call(http.get('/cane-intakes', { ...params(p), signal })),
   createIntake: (d) => call(http.post('/cane-intakes', d)),
   acceptIntake: (id) => call(http.post(`/cane-intakes/${id}/accept`)),
   rejectIntake: (id, reason) => call(http.post(`/cane-intakes/${id}/reject`, null, params({ reason }))),
-  dailyTon: () => call(http.get('/cane-intakes/daily-ton')),
+  dailyTon: (signal) => call(http.get('/cane-intakes/daily-ton', { signal })),
 
   // ---------------- 压榨机组 ----------------
   listPresses: (p) => call(http.get('/press-stations', params(p))),

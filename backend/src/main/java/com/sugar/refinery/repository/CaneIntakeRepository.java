@@ -22,6 +22,18 @@ public interface CaneIntakeRepository extends JpaRepository<CaneIntake, Long> {
 
     List<CaneIntake> findBySupplier(String supplier);
 
+    /**
+     * 组合筛选：验收状态与品质结论按「同时满足」过滤；
+     * 为 null / 空白的参数不参与限制（单条件、双条件、无条件都走这一个口径）。
+     */
+    @Query("""
+            select c from CaneIntake c
+            where (:status is null or c.status = :status)
+              and (:result is null or c.result = :result)
+            order by c.intakeAt desc, c.id desc
+            """)
+    List<CaneIntake> search(@Param("status") String status, @Param("result") String result);
+
     /** 行锁（SELECT ... FOR UPDATE）：投料交接扣减余量时串行化同一磅单的并发分配 */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select c from CaneIntake c where c.id = :id")
