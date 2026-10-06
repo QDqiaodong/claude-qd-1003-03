@@ -2,12 +2,24 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import router from '../router'
 import api from '../api'
+import {
+  INTAKE_STATUSES,
+  INTAKE_RESULTS,
+  buildIntakeParams,
+  intakeFiltersFromQuery,
+  createLoadGate,
+  intakeLoadErrorMessage
+} from '../utils/intakeQuery'
 
 // ------------------------------------------------------------------
 // 页面操作范式：过磅三联柱 + 品质胶囊。
 // 每张磅单画成一根竖直的三段柱：底段毛重、其上皮重（挖掉的一段）、顶端扣杂（斜纹），
 // 剩下那截高亮的就是净重——重量关系一眼看得出来，不用读数字。
 // 右侧三枚胶囊直接给出糖度/纯度/纤维分，结论徽章跟着 record 自动判定走。
+//
+// 筛选口径：验收状态与品质结论可单独或组合使用，组合按「同时满足」过滤；
+// 条件与地址查询参数（?status=…&result=…）双向对齐，直接打开 / 刷新还原同一批结果；
+// 合法空结果保持空态，不回退为全部磅单；连续快速切换时只认最后一次选择的响应。
 // ------------------------------------------------------------------
 
 const routeQuery = computed(() => router.currentRoute.value.query || {})
@@ -21,6 +33,12 @@ const form = ref({
   quality: { brix: 13.5, purity: 86.0, fiber: 12.5 }
 })
 const daily = ref(0)
+
+// 筛选条件：初始值取自地址，之后由下拉框与地址监听双向同步
+const filters = ref(intakeFiltersFromQuery(routeQuery.value))
+
+// 加载序列闸：连续快速切换条件时，较早发出的慢响应不得覆盖最后一次选择
+const loadGate = createLoadGate()
 
 const selected = computed(() => intakes.value.find((i) => i.id === selectedId.value) || null)
 
@@ -38,14 +56,28 @@ const previewRate = computed(() => {
 })
 
 async function load() {
+  const token = loadGate.next()
   error.value = ''
-  try {
-    const q = routeQuery.value.q
-    intakes.value = await api.listIntakes(q ? { status: q } : {})
-    if (!intakes.value.length && q) intakes.value = await api.listIntakes()
-    daily.value = await api.dailyTon()
-    if (!selectedId.value && intakes.value.length) selectedId.value = intakes.value[0].id
-  } catch (e) { error.value = e.message }
+  // 列表按当前筛选条件查询；今日进厂总量是独立口径（全厂当日有效磅单），不随列表条件缩小
+  const [listRes, tonRes] = await Promise.allSettled([
+    api.listIntakes(buildIntakeParams(filters.value)),
+    api.dailyTon()
+  ])
+  if (!loadGate.isCurrent(token)) return // 已有更新的条件，这份迟到的响应直接丢弃
+  if (listRes.status === 'fulfilled') {
+    intakes.value = listRes.value
+    if (!listRes.value.some((i) => i.id === selectedId.value)) {
+      selectedId.value = listRes.value.length ? listRes.value[0].id : null
+    }
+  }
+  if (tonRes.status === 'fulfilled') {
+    daily.value = tonRes.value
+  }
+  const failed = [listRes, tonRes].find((r) => r.status === 'rejected')
+  if (failed) {
+    // 失败不改筛选条件、不动地址；提示后值班员按原条件重试即可
+    error.value = intakeLoadErrorMessage(failed.reason)
+  }
 }
 
 async function create() {
@@ -82,7 +114,23 @@ function seg(v, gross) {
   return Math.max(0, Math.min(100, (Number(v) / g) * 100)) + '%'
 }
 
-watch(() => routeQuery.value.q, () => load())
+// 下拉框变化 → 写回地址（清空某一项只移除对应参数），由地址监听统一触发加载
+watch(filters, () => {
+  const query = buildIntakeParams(filters.value)
+  const cur = routeQuery.value
+  if ((query.status || '') === (cur.status || '') && (query.result || '') === (cur.result || '')) return
+  router.replace({ path: router.currentRoute.value.path, query })
+}, { deep: true })
+
+// 地址变化（直接打开 / 刷新 / 前进后退 / 筛选写回）→ 对齐下拉框并按地址条件加载
+watch(routeQuery, (q) => {
+  const next = intakeFiltersFromQuery(q)
+  if (next.status !== filters.value.status || next.result !== filters.value.result) {
+    filters.value = next
+  }
+  load()
+})
+
 onMounted(load)
 </script>
 
@@ -94,7 +142,10 @@ onMounted(load)
         <span class="panel-desc">柱高按毛重归一；挖掉皮重与扣杂，剩下高亮那段就是净重</span>
       </div>
 
-      <div v-if="error" class="err">{{ error }}</div>
+      <div v-if="error" class="err">
+        <span>{{ error }}</span>
+        <button class="act sm retry" @click="load">重试</button>
+      </div>
       <div v-if="tip" class="ok-tip">{{ tip }}</div>
 
       <div class="stat-row">
@@ -102,6 +153,21 @@ onMounted(load)
         <div class="stat"><div class="k">已验收</div><div class="v">{{ intakes.filter(i => i.status === '已验收').length }}</div></div>
         <div class="stat"><div class="k">拒收</div><div class="v">{{ intakes.filter(i => i.result === '拒收').length }}</div></div>
         <div class="stat"><div class="k">今日进厂(吨)</div><div class="v">{{ daily }}</div></div>
+      </div>
+
+      <div class="filter-row">
+        <label>验收状态
+          <select v-model="filters.status" class="fld">
+            <option value="">全部</option>
+            <option v-for="s in INTAKE_STATUSES" :key="s" :value="s">{{ s }}</option>
+          </select>
+        </label>
+        <label>品质结论
+          <select v-model="filters.result" class="fld">
+            <option value="">全部</option>
+            <option v-for="r in INTAKE_RESULTS" :key="r" :value="r">{{ r }}</option>
+          </select>
+        </label>
       </div>
 
       <div class="scale-row">
@@ -115,6 +181,7 @@ onMounted(load)
           <div class="s-net">{{ i.netKg }}kg</div>
           <div class="s-res" :class="'r-' + i.result">{{ i.result }}</div>
         </div>
+        <div v-if="!intakes.length" class="empty">暂无符合筛选条件的磅单</div>
       </div>
 
       <div class="legend">
@@ -166,6 +233,12 @@ onMounted(load)
 </template>
 
 <style scoped>
+.filter-row { display: flex; gap: 12px; margin: 10px 0; }
+.filter-row label { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+
+.retry { margin-left: 10px; }
+.empty { font-size: 12px; color: var(--muted); padding: 8px 2px; align-self: center; }
+
 .scale-row { display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-end; }
 
 .scale { width: 92px; text-align: center; cursor: pointer; padding: 6px; border-radius: 9px; border: 1px solid transparent; }

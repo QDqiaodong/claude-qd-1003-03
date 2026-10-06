@@ -29,14 +29,22 @@ public class CaneIntakeService {
         this.intakeRepository = intakeRepository;
     }
 
+    /**
+     * 磅单筛选：验收状态与品质结论可单独或组合使用，组合按「同时满足」过滤；
+     * 未选择（空）的条件不参与限制，合法空结果原样返回空列表，不回退为全部。
+     */
+    @Transactional(readOnly = true)
     public List<CaneIntake> list(String status, String result) {
-        if (status != null && !status.isBlank()) {
-            return intakeRepository.findByStatus(status);
+        if (status != null && !status.isBlank() && !Dict.isValidIntakeStatus(status)) {
+            throw new BizException("验收状态不合法：" + status);
         }
-        if (result != null && !result.isBlank()) {
-            return intakeRepository.findByResult(result);
+        if (result != null && !result.isBlank() && !Dict.isValidIntakeResult(result)) {
+            throw new BizException("品质结论不合法：" + result);
         }
-        return intakeRepository.findAll();
+        return intakeRepository.findAll().stream()
+                .filter(c -> status == null || status.isBlank() || status.equals(c.getStatus()))
+                .filter(c -> result == null || result.isBlank() || result.equals(c.getResult()))
+                .toList();
     }
 
     public CaneIntake get(Long id) {

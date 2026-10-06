@@ -1,11 +1,31 @@
 -- H2（MODE=MySQL）测试库结构：与 MySQL schema.sql 同构，保留闭环测试涉及的
--- 洗罐、成品糖批次、质量复检表；唯一索引和 CHECK 约束在数据库层兜底。
+-- 进厂磅单、洗罐、成品糖批次、质量复检表；唯一索引和 CHECK 约束在数据库层兜底。
 
 DROP TABLE IF EXISTS feed_batch;
+DROP TABLE IF EXISTS cane_intake;
 DROP TABLE IF EXISTS sugar_quality_inspection;
 DROP TABLE IF EXISTS sugar_batch;
 DROP TABLE IF EXISTS pan_wash;
 DROP TABLE IF EXISTS evap_pan;
+
+CREATE TABLE cane_intake (
+    id            BIGINT AUTO_INCREMENT PRIMARY KEY,
+    ticket_no     VARCHAR(32) NOT NULL UNIQUE,
+    supplier      VARCHAR(64) NOT NULL,
+    truck_no      VARCHAR(24) NOT NULL,
+    gross_kg      DECIMAL(12,2) NOT NULL,
+    tare_kg       DECIMAL(12,2) NOT NULL,
+    net_kg        DECIMAL(12,2) NOT NULL,
+    deduction_kg  DECIMAL(12,2) NOT NULL DEFAULT 0,
+    allocated_kg  DECIMAL(12,2) NOT NULL DEFAULT 0,
+    brix          DECIMAL(5,2) NOT NULL,
+    purity        DECIMAL(5,2) NOT NULL,
+    fiber         DECIMAL(5,2) NOT NULL,
+    result        VARCHAR(16) NOT NULL,
+    status        VARCHAR(16) NOT NULL,
+    intake_at     TIMESTAMP,
+    CONSTRAINT ck_intake_alloc CHECK (allocated_kg >= 0 AND allocated_kg <= net_kg)
+);
 
 CREATE TABLE sugar_batch (
     id              BIGINT AUTO_INCREMENT PRIMARY KEY,
